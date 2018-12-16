@@ -1,0 +1,381 @@
+#include "x509.h"
+using namespace std;
+
+typedef unsigned char byte;
+
+static const string base64_chars =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "abcdefghijklmnopqrstuvwxyz"
+    "0123456789+/";
+
+typedef struct Item
+{
+    string title;
+    int len;
+    int type;
+    vector<byte> data;
+    Item() {}
+    void set(string _title, int _len, int _type)
+    {
+        title = _title;
+        len = _len;
+        type = _type;
+    }
+    void set(string _title, int _len, int _type, vector<byte> vec)
+    {
+        title = _title;
+        len = _len;
+        type = _type;
+        data = vec;
+    }
+} Item; // 解析项目
+vector<Item> ansData;
+void parseCertificate(byte *data, int begin, int end)
+{
+    int pos = begin;
+    int type;
+    while (pos < end)
+    {
+        // 类型
+        int type = data[pos++];
+        int length = 0;
+        if (data[pos] & 0x80)
+        {
+            int len_len = data[pos++] & 0x7f;
+            while (len_len--)
+            {
+                length <<= 8;
+                length += data[pos++];
+            }
+        }
+        else
+        {
+            length = data[pos++] & 0x7f;
+        }
+
+        if (length < 0 || pos + length > end)
+        {
+            break;
+        }
+        string title = "";
+        Item item;
+        vector<byte> vec;
+        vec.clear();
+        int index = 0;
+        int byteData = 0;
+
+        switch (type)
+        {
+        case 0:
+            for (int i = begin + 1; i < end; i++)
+            {
+                vec.push_back(data[i]);
+            }
+            item.set("0x00", end - begin - 1, type, vec);
+            ansData.push_back(item);
+            break;
+
+        case 1:
+            item.set(data[pos] == 0 ? "False" : "True", length, type);
+            ansData.push_back(item);
+            break;
+        case 5:
+            break;
+        case 6:
+            for (int i = 0; i < length; i++)
+            {
+                byteData <<= 7;
+                byteData += data[pos + i] & 0x7f;
+                if ((data[pos + i] & 0x80) == 0)
+                {
+                    // 第一次进行拆分
+                    if (i == 0)
+                    {
+                        int firstNum = min(byteData / 40, 2);
+                        title += to_string(firstNum) + "." + to_string(byteData - 40 * firstNum) + ".";
+                        index++;
+                    }
+                    else
+                    {
+                        title += to_string(byteData) + ".";
+                    }
+                    byteData = 0;
+                    index++;
+                }
+            }
+            item.set(title.substr(0, title.length() - 1), length, type);
+            ansData.push_back(item);
+            break;
+        case 2:
+        case 3:
+        case 128:
+            if (type == 3)
+                length--;
+            for (int i = 0; i < length; i++)
+            {
+                if (type == 3)
+                    vec.push_back(data[pos + i + 1]);
+                else
+                    vec.push_back(data[pos + i]);
+            }
+            item.set(title, length, type, vec);
+            ansData.push_back(item);
+            break;
+        // 结构体递归
+        case 4:
+        case 48:
+        case 49:
+            parseCertificate(data, pos, pos + length);
+            break;
+        case 160:
+        case 163:
+            title = (type == 160) ? "Version" : "Extension";
+            item.set(title, length, type);
+            ansData.push_back(item);
+            parseCertificate(data, pos, pos + length);
+            break;
+
+        // char
+        case 12:
+        case 19:
+        case 22:
+        case 23:
+        case 130:
+        case 134:
+            if (type == 23)
+                title = "UTCTime";
+            for (int i = 0; i < length; i++)
+            {
+                title += (char)data[pos + i];
+            }
+            item.set(title, length, type);
+            ansData.push_back(item);
+            break;
+        default:
+            for (int i = 0; i < length; i++)
+            {
+                vec.push_back(data[pos + i - 1]);
+            }
+            item.set("", length, type, vec);
+            ansData.push_back(item);
+        }
+        pos += length;
+    }
+}
+
+void printTime(string timeStr)
+{
+    cout << "20" << timeStr[0] << timeStr[1] << "-";
+    cout << timeStr[2] << timeStr[3] << "-";
+    cout << timeStr[4] << timeStr[5] << " ";
+    cout << timeStr[6] << timeStr[7] << ":";
+    cout << timeStr[8] << timeStr[9] << ":";
+    cout << timeStr[10] << timeStr[11];
+}
+
+void printHex(vector<byte> data, int length)
+{
+    cout<<hex;
+    for (int i = 0; i < length; i++)
+    {
+        // 高低部分分别输出
+        int heighPart = data[i] >> 4;
+        heighPart &= 0x0f;
+        cout << heighPart<< (data[i] & 0x0f);
+        if(i != 0 && i % 40 == 0) cout<<endl;
+    }
+    cout<<endl;
+    cout<<dec;
+}
+
+void printResult()
+{
+    std::map<string, string> titleToString = {
+        {"1.2.840.10045.2.1", "EC Public Key:"},
+        {"1.3.6.1.5.5.7.1.1", "AuthorityInfoAccess:"},
+        {"1.3.6.1.5.5.7.3.1", "(id_kp_serverAuth): True"},
+        {"1.3.6.1.5.5.7.3.2", "(id_kp_clientAuth): True"},
+        {"2.5.29.37", "(Extended key usage):"},
+        {"2.5.29.31", "CRL Distribution Points:"},
+        {"Extension", "Extend:"},
+        {"2.23.140.1.2.2", "(organization-validated):"},
+        {"2.5.29.19", "(Basic Constraints):"},
+        {"1.3.6.1.5.5.7.3.2", "(id_kp_clientAuth): True"}};
+    std::map<string, string> titleToHex = {
+        {"1.2.840.10045.3.1.7",
+         "(SEC 2 recommended elliptic curve domain): \n"},
+        {"2.5.29.35", "(Authority Key Identifier): "},
+        {"2.5.29.14", "(Subject Key Identifier): "}};
+    std::map<string, string> titleToNext = {
+        {"1.3.6.1.5.5.7.2.1", "OID for CPS qualifier: "},
+        {"1.3.6.1.5.5.7.48.1", "OCSP: "},
+        {"1.3.6.1.5.5.7.48.2", "id-ad-caIssuers: "},
+        {"1.3.6.1.4.1.311.60.2.1.1", "(Locality): "},
+        {"1.3.6.1.4.1.311.60.2.1.3", "(Country): "},
+        {"1.3.6.1.4.1.311.60.2.1.2", "(State or province): "},
+        {"2.5.4.3", "(id-at-commonName): "},
+        {"2.5.4.5", "(id-at-serialNumber): "},
+        {"2.5.4.6", "(id-at-countryName): "},
+        {"2.5.4.7", "(id-at-localityName): "},
+        {"2.5.4.8", "(id-at-stateOrProvinceName): "},
+        {"2.5.4.9", "(id-at-streetAddress): "},
+        {"2.5.4.10", "(id-at-organizationName): "},
+        {"2.5.4.11", "(id-at-organizationalUnitName): "},
+        {"2.5.4.12", "(id-at-title): "},
+        {"2.5.4.13", "(id-at-description): "},
+        {"2.5.4.15", "(id-at-businessCategory): "},
+        {"2.5.29.32", "(Certificate Policies): "},
+        {"2.5.29.15", "(Key Usage): "}};
+
+    std::map<string, string> algorithmObject = {
+        {"1.2.840.10040.4.1", "DSA"},
+        {"1.2.840.10040.4.3", "sha1DSA"},
+        {"1.2.840.113549.1.1.1", "RSA"},
+        {"1.2.840.113549.1.1.2", "md2RSA"},
+        {"1.2.840.113549.1.1.3", "md4RSA"},
+        {"1.2.840.113549.1.1.4", "md5RSA"},
+        {"1.2.840.113549.1.1.5", "sha1RSA"},
+        {"1.3.14.3.2.29", "sha1RSA"},
+        {"1.2.840.113549.1.1.13", "sha512RSA"},
+        {"1.2.840.113549.1.1.11", "sha256RSA"}};
+
+    for (int i = 0; i < ansData.size(); i++)
+    {
+        Item item = ansData[i];
+        if (!strcmp(item.title.c_str(), "Version"))
+        {
+            item = ansData[++i];
+            if (item.type == 0x02)
+            {
+                cout << "Version: ";
+                cout << "V" << item.data[0] + 1 << endl;
+                item = ansData[++i];
+                cout << "Seq: ";
+                printHex(item.data, item.len);
+            }
+            else
+            {
+                i--;
+            }
+        }
+        else if (titleToString.find(item.title) != titleToString.end())
+        {
+            cout << titleToString[item.title] << endl;
+        }
+        else if (titleToHex.find(item.title) != titleToHex.end())
+        {
+            string title = titleToHex[item.title];
+            item = ansData[++i];
+            if (!item.data.empty())
+            {
+                cout << title;
+                printHex(item.data, item.len);
+            }
+            else
+            {
+                i--;
+            }
+        }
+        else if (titleToNext.find(item.title) != titleToNext.end())
+        {
+            cout << titleToNext[item.title];
+            item = ansData[++i];
+            cout << item.title << endl;
+        }
+        else if (algorithmObject.find(item.title) != algorithmObject.end())
+        {
+            cout << "Algorithm: " << algorithmObject[item.title];
+            item = ansData[++i];
+            if (item.type == 0x03)
+            {
+                cout << "\nPublic Key:" << endl;
+                printHex(item.data, item.len);
+            }
+            else
+            {
+                i--;
+            }
+        }
+        else if (!strcmp(item.title.c_str(), "0x00"))
+        {
+            cout << "Public Key: " << endl;
+            printHex(item.data, item.len);
+        }
+        else if (!strcmp(item.title.c_str(), "2.5.29.17"))
+        {
+            cout << "Subject Alternative Name: ";
+            item = ansData[++i];
+            cout << item.title;
+            item = ansData[++i];
+            while (item.type == 0x82)
+            {
+                cout << ", " << item.title;
+                item = ansData[++i];
+            }
+            i--;
+            cout << endl;
+        }
+        else if (item.title.length() > 7 &&
+                 !strcmp(item.title.substr(0, 7).c_str(), "UTCTime"))
+        {
+            cout << "Valid Date: ";
+            string beginTime = item.title.substr(7, item.title.length() - 8);
+            printTime(beginTime);
+            cout << " - ";
+            item = ansData[++i];
+            string endTime = item.title.substr(7, item.title.length() - 8);
+            printTime(endTime);
+            cout << endl;
+        }
+        else
+        {
+            // cout << item.title << endl;
+            // if (item.data != NULL) {
+            //   printHex(item.data, item.len);
+            // }
+        }
+    }
+}
+
+// base 64解码
+byte *parseBase64(string data, int &length)
+{
+    // 填充为整数byte
+    if (data.length() % 4 != 0)
+    {
+        for (int i = 0; i < 4 - data.length() % 4; i++)
+        {
+            data += "0";
+        }
+    }
+    length = (data.length() / 4) * 3;
+    // 按照byte进行分割
+    byte *byteGroup = new byte[length];
+    memset(byteGroup, length, 0);
+    int currentPos = 0;
+    for (int i = 0; i < data.length(); i += 4)
+    {
+        byte base64Code[4];
+        // 通过索引获得位置
+        for (int j = 0; j < 4; j++)
+        {
+            base64Code[j] = base64_chars.find(data[i + j]);
+        }
+
+        // base64 -> byte
+        byteGroup[currentPos++] = ((base64Code[0] & 0x3f) << 2) | ((base64Code[1] & 0x30) >> 4);
+        byteGroup[currentPos++] = ((base64Code[1] & 0x0f) << 4) | ((base64Code[2] & 0x3c) >> 2);
+        byteGroup[currentPos++] = ((base64Code[2] & 0x03) << 6) | (base64Code[3] & 0x3f);
+    }
+    return byteGroup;
+}
+
+void parseX509(string data)
+{
+    int length = 0;
+    byte *text = parseBase64(data, length);
+    cout << "length:" << length << endl;
+    parseCertificate(text, 0, length);
+    printResult();
+    delete[] text;
+}

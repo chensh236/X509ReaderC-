@@ -1,0 +1,36 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+C:/Users/Chen Sihang/Desktop/X509/X509.cpp
+x509.h
+C:/Users/Chen Sihang/Desktop/X509/x509.h
+
+C:/Users/Chen Sihang/Desktop/X509/main.cpp
+cstring
+-
+iostream
+-
+fstream
+-
+x509.h
+C:/Users/Chen Sihang/Desktop/X509/x509.h
+
+C:/Users/Chen Sihang/Desktop/X509/staticNumbers.h
+map
+-
+cstring
+-
+
+C:/Users/Chen Sihang/Desktop/X509/x509.h
+iostream
+-
+vector
+-
+staticNumbers.h
+C:/Users/Chen Sihang/Desktop/X509/staticNumbers.h
+
